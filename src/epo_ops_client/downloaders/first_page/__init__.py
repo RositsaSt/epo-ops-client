@@ -5,21 +5,21 @@ Download first-page PDFs from EPO OPS for a list of publication numbers + kind c
 """
 
 __all__ = [
-    "DownloaderConfig",
+    "OPSFirstPageDownloaderConfig",
     "DownloadTask",
     "OPSAuthClient",
     "RateLimiter",
-    "CsvRunLog",
+    "ThreadSafeCsvDownloadLogger",
     "download_many",
-    "tasks_from_csv",
+    "load_download_tasks_from_csv",
 ]
 
 __version__ = "0.1.0"
 
-from .config import DownloaderConfig
+from .config import OPSFirstPageDownloaderConfig
 from .models import DownloadTask
 from .auth import OPSAuthClient
 from .rate_limiter import RateLimiter
-from .logging_csv import CsvRunLog
+from .logging_csv import ThreadSafeCsvDownloadLogger
 from .downloader import download_many
-from .io_tasks import tasks_from_csv
+from .io_tasks import load_download_tasks_from_csv
