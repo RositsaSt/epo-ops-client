@@ -4,14 +4,25 @@ import os
 from dotenv import load_dotenv
 
 from .auth import OPSAuthClient
-from .config import DownloaderConfig
+from .config import OPSFirstPageDownloaderConfig
 from .downloader import download_many
-from .io_tasks import tasks_from_csv
-from .logging_csv import CsvRunLog
+from .io_tasks import load_download_tasks_from_csv
+from .logging_csv import ThreadSafeCsvDownloadLogger
 from .rate_limiter import RateLimiter
 
 
 def main() -> None:
+    """
+    Entry point for the OPS first-page PDF downloader.
+
+    Workflow:
+    1. Load environment variables (.env)
+    2. Validate OPS credentials
+    3. Initialize configuration and service objects
+    4. Load download tasks from CSV
+    5. Execute bulk download
+    """
+    
     load_dotenv()
 
     ops_key = os.getenv("EPO_OPS_KEY")
@@ -19,15 +30,20 @@ def main() -> None:
     if not ops_key or not ops_secret:
         raise SystemExit("Missing EPO_OPS_KEY / EPO_OPS_SECRET in environment (.env).")
 
-    config = DownloaderConfig()
-    auth = OPSAuthClient(config.base_url, ops_key, ops_secret, timeout_s=config.token_timeout_s)
-    limiter = RateLimiter(config.rate_per_sec)
-    run_log = CsvRunLog(config.log_path)
+    downloader_config = OPSFirstPageDownloaderConfig()
+    auth_client = OPSAuthClient(downloader_config.ops_api_base_url, ops_key, ops_secret, timeout_s=downloader_config.token_request_timeout_seconds)
+    rate_limiter = RateLimiter(downloader_config.max_requests_per_second)
+    download_logger = ThreadSafeCsvDownloadLogger(downloader_config.log_file_path)
+    download_tasks = load_download_tasks_from_csv("pub_number_kind.csv", default_country=downloader_config.default_country_code)
+    
+    download_many(download_tasks, downloader_config=downloader_config, auth_client=auth_client, 
+                  rate_limiter=rate_limiter, download_logger=download_logger)
 
-    tasks = tasks_from_csv("pub_number_kind.csv", default_country=config.country_default)
-    download_many(tasks, config=config, auth=auth, limiter=limiter, run_log=run_log)
-
-    print(f"Done. Log: {config.log_path} | Files: {config.out_dir}/")
+    print(
+        f"Download complete.\n"
+        f"Log file: {downloader_config.log_file_path}\n"
+        f"Output directory: {downloader_config.output_dir}"
+        )
 
 
 if __name__ == "__main__":
