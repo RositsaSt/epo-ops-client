@@ -168,7 +168,6 @@ def download_one(
     image_download_url = downloader_config.image_url_template().format(
         country=download_task.country, pub=download_task.pub_number, kind=download_task.kind
     )
-    print(image_download_url)
 
     request_headers: dict[str, str] = {
         "Authorization": f"Bearer {auth_client.get_valid_token()}",
