@@ -1,3 +1,16 @@
+"""
+LEGACY MODULE – DO NOT USE
+
+This module contains the original monolithic implementation
+of the EPO OPS Patent First Page Downloader.
+
+This module has been superseded by the modular
+epo_ops_patent_first_page_downloader package structure.
+
+This file is kept temporarily for reference and will be
+removed in a future release.
+"""
+
 from dotenv import load_dotenv
 import os
 import csv
