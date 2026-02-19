@@ -31,7 +31,9 @@ def main() -> None:
         raise SystemExit("Missing EPO_OPS_KEY / EPO_OPS_SECRET in environment (.env).")
 
     downloader_config = OPSFirstPageDownloaderConfig()
-    auth_client = OPSAuthClient(downloader_config.ops_api_base_url, ops_key, ops_secret, timeout_s=downloader_config.token_request_timeout_seconds)
+    auth_client = OPSAuthClient(downloader_config.ops_api_base_url, ops_key, ops_secret, 
+                                request_timeout_seconds=downloader_config.token_request_timeout_seconds)
+    print(downloader_config.ops_api_base_url)
     rate_limiter = RateLimiter(downloader_config.max_requests_per_second)
     download_logger = ThreadSafeCsvDownloadLogger(downloader_config.log_file_path)
     download_tasks = load_download_tasks_from_csv("pub_number_kind.csv", default_country=downloader_config.default_country_code)

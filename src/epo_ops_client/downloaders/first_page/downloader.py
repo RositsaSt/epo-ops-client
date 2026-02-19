@@ -168,9 +168,10 @@ def download_one(
     image_download_url = downloader_config.image_url_template().format(
         country=download_task.country, pub=download_task.pub_number, kind=download_task.kind
     )
+    print(image_download_url)
 
     request_headers: dict[str, str] = {
-        "Authorization": f"Bearer {auth_client.get()}",
+        "Authorization": f"Bearer {auth_client.get_valid_token()}",
         "Accept": "application/pdf",
         "Range": downloader_config.ops_image_range_header_value,
     }
@@ -180,7 +181,7 @@ def download_one(
     session = _get_thread_local_session()
 
     for attempt_number in range(1, downloader_config.max_retry_attempts + 1):
-        rate_limiter.wait()
+        rate_limiter.wait_for_slot()
         
         try:
             response = session.get(image_download_url, headers=request_headers, timeout=downloader_config.http_request_timeout_seconds)
@@ -273,17 +274,17 @@ def download_many(
             ]
             for future in as_completed(futures):
                 download_result: DownloadResult = future.result()
-                
+
                 download_logger.append_row(DownloadLogEntry(
                     timestamp=ThreadSafeCsvDownloadLogger.current_timestamp_string(),
                     country=download_result.download_task.country,
                     pub_number=download_result.download_task.pub_number,
                     kind=download_result.download_task.kind,
-                    status=download_result.download_status,
-                    http_status=download_result.http_status_code,
+                    download_status=download_result.download_status,
+                    http_status_code=download_result.http_status_code,
                     bytes_written=download_result.bytes_written,
-                    message=download_result.status_message,
-                    out_path=str(download_result.output_file_path),
+                    status_message=download_result.status_message,
+                    output_file_path=str(download_result.output_file_path),
                 ))
                 progress_bar.update(1)
 
