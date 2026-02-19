@@ -135,11 +135,6 @@ def download_one(
     rate_limiter: RateLimiter,
 ) -> DownloadResult:
     """
-    Download one first-page PDF for a task.
-
-    Returns a structured DownloadResult; no side effects besides writing the file.
-    """
-    """
     Download one first-page PDF for a single OPS image task.
 
     Behavior:
