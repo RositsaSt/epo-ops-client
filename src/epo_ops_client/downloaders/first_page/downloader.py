@@ -5,174 +5,286 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, Tuple
+from typing import Iterator
 
 import requests
 from tqdm import tqdm
 
 from .auth import OPSAuthClient
-from .config import DownloaderConfig
-from .logging_csv import CsvRunLog, LogRow
+from .config import OPSFirstPageDownloaderConfig
+from .logging_csv import DownloadLogEntry, ThreadSafeCsvDownloadLogger
 from .models import DownloadTask
 from .rate_limiter import RateLimiter
 
 
-RETRY_STATUS = {429, 500, 502, 503, 504}
+# HTTP status codes that should be retried with backoff.
+RETRYABLE_HTTP_STATUS_CODES  = {429, 500, 502, 503, 504}
 
 
 @dataclass(frozen=True)
 class DownloadResult:
-    task: DownloadTask
-    ok: bool
-    status: str            # downloaded / skipped / failed
-    http_status: int
+    """
+    Result of attempting to download a single OPS first-page PDF.
+
+    Attributes:
+        download_task: The task describing which publication image to fetch.
+        is_successful: True if the operation succeeded (including "skipped").
+        download_status: One of: "downloaded", "skipped", "failed".
+        http_status_code: HTTP status code received (0 if request never reached server).
+        bytes_written_count: Number of bytes written to disk (0 on failure).
+        status_message: Human-readable message explaining outcome.
+        output_file_path: Destination path for the PDF (even if skipped/failed).
+    """
+    download_task: DownloadTask
+    is_successful: bool
+    download_status: str            # downloaded / skipped / failed
+    http_status_code: int
     bytes_written: int
-    message: str
-    out_path: Path
+    status_message: str
+    output_file_path: Path
 
 
-def _chunked(items: list[DownloadTask], size: int) -> Iterator[list[DownloadTask]]:
-    for i in range(0, len(items), size):
-        yield items[i:i + size]
+def _chunk_download_tasks(download_tasks: list[DownloadTask], batch_size: int) -> Iterator[list[DownloadTask]]:
+    """
+    Yield successive batches of download tasks.
+
+    Args:
+        download_tasks: Full list of tasks to process.
+        batch_size: Maximum number of tasks in each yielded batch.
+
+    Yields:
+        Lists of DownloadTask with length <= batch_size.
+    """
+    for index in range(0, len(download_tasks), batch_size):
+        yield download_tasks[index:index + batch_size]
 
 
-_thread_local = threading.local()
+_thread_local_storage = threading.local()
 
 
-def _get_thread_session() -> requests.Session:
-    sess = getattr(_thread_local, "session", None)
-    if sess is None:
-        sess = requests.Session()
-        _thread_local.session = sess
-    return sess
+def _get_thread_local_session() -> requests.Session:
+    """
+    Return a thread-local requests.Session.
+
+    Using a session per thread enables HTTP connection reuse while keeping
+    thread-safety predictable.
+    """
+    session = getattr(_thread_local_storage, "session", None)
+    if session is None:
+        session = requests.Session()
+        _thread_local_storage.session = session
+    return session
 
 
-def _out_path(config: DownloaderConfig, task: DownloadTask) -> Path:
-    fname = f"{task.country}{task.pub_number}{task.kind}_page1.pdf"
-    return config.out_dir / fname
+def _build_output_file_path(downloader_config: OPSFirstPageDownloaderConfig, download_task: DownloadTask) -> Path:
+    """
+    Build the destination file path for a downloaded first-page PDF.
+
+    Filename format:
+        {country}{pub_number}{kind}_page1.pdf
+
+    Args:
+        downloader_config: Downloader configuration (contains output directory).
+        download_task: Task describing publication country/number/kind.
+
+    Returns:
+        Full path where the PDF should be written.
+    """
+    file_name = f"{download_task.country}{download_task.pub_number}{download_task.kind}_page1.pdf"
+    return downloader_config.output_dir / file_name
 
 
-def _is_pdf(content: bytes) -> bool:
-    return content.startswith(b"%PDF")
+def _is_valid_pdf_content(file_content: bytes) -> bool:
+    """
+    Best-effort validation that the response body looks like a PDF.
+    """
+    return file_content.startswith(b"%PDF")
 
+def _compute_retry_sleep_seconds(
+    *,
+    attempt_number: int,
+    retry_after_header_value: str | None,
+    maximum_sleep_seconds: float = 60.0,
+) -> float:
+    """
+    Compute how long to sleep before retrying a request.
+
+    Preference order:
+      1) If Retry-After header is present and numeric, use it (seconds).
+      2) Otherwise use exponential backoff with jitter: 2^(attempt-1) + random(0,1).
+
+    Args:
+        attempt_number: 1-based attempt number.
+        retry_after_header_value: Value of the Retry-After header (if any).
+        maximum_sleep_seconds: Upper bound for the computed sleep.
+
+    Returns:
+        Sleep duration in seconds.
+    """
+    if retry_after_header_value and retry_after_header_value.isdigit():
+        return float(int(retry_after_header_value))
+
+    backoff_with_jitter = (2 ** (attempt_number - 1)) + random.random()
+    return float(min(maximum_sleep_seconds, backoff_with_jitter))
 
 def download_one(
-    task: DownloadTask,
+    download_task: DownloadTask,
     *,
-    config: DownloaderConfig,
-    auth: OPSAuthClient,
-    limiter: RateLimiter,
+    downloader_config: OPSFirstPageDownloaderConfig,
+    auth_client: OPSAuthClient,
+    rate_limiter: RateLimiter,
 ) -> DownloadResult:
     """
     Download one first-page PDF for a task.
 
     Returns a structured DownloadResult; no side effects besides writing the file.
     """
-    config.out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = _out_path(config, task)
+    """
+    Download one first-page PDF for a single OPS image task.
+
+    Behavior:
+    - Ensures output directory exists.
+    - Skips download if the output file exists and is larger than 1 KiB.
+    - Applies global rate limiting before each HTTP attempt.
+    - Retries on retryable HTTP codes (429/5xx) and network exceptions.
+    - Refreshes OAuth token and retries on HTTP 401.
+
+    Args:
+        download_task: Publication task (country + number + kind).
+        downloader_config: Runtime configuration (timeouts, retry attempts, output dir, etc.).
+        auth_client: OPS OAuth client used to obtain/refresh Bearer token.
+        rate_limiter: Global limiter shared across workers.
+
+    Returns:
+        DownloadResult describing outcome and output path.
+    """
+    downloader_config.output_dir.mkdir(parents=True, exist_ok=True)
+    output_file_path = _build_output_file_path(downloader_config, download_task)
 
     # Skip if already downloaded and non-trivial size
-    if out_path.exists() and out_path.stat().st_size > 1024:
-        return DownloadResult(task, True, "skipped", 200, int(out_path.stat().st_size), "already exists", out_path)
+    if output_file_path.exists() and output_file_path.stat().st_size > 1024:
+        return DownloadResult(download_task, True, "skipped", 200, int(output_file_path.stat().st_size), "already exists", output_file_path)
 
-    url = config.image_url_template().format(country=task.country, pub=task.pub_number, kind=task.kind)
+    image_download_url = downloader_config.image_url_template().format(
+        country=download_task.country, pub=download_task.pub_number, kind=download_task.kind
+    )
 
-    headers = {
-        "Authorization": f"Bearer {auth.get()}",
+    request_headers: dict[str, str] = {
+        "Authorization": f"Bearer {auth_client.get()}",
         "Accept": "application/pdf",
-        "Range": config.range_header_value,  # keep your behavior, but now configurable
+        "Range": downloader_config.ops_image_range_header_value,
     }
 
-    last_msg = ""
-    http_status = 0
-    session = _get_thread_session()
+    last_status_message = ""
+    http_status_code = 0
+    session = _get_thread_local_session()
 
-    for attempt in range(1, config.max_attempts + 1):
-        limiter.wait()
+    for attempt_number in range(1, downloader_config.max_retry_attempts + 1):
+        rate_limiter.wait()
+        
         try:
-            r = session.get(url, headers=headers, timeout=config.request_timeout_s)
-            http_status = r.status_code
+            response = session.get(image_download_url, headers=request_headers, timeout=downloader_config.http_request_timeout_seconds)
+            http_status_code = response.status_code
 
-            if http_status == 401:
-                # token expired/invalid — refresh and retry
-                headers["Authorization"] = f"Bearer {auth.force_refresh()}"
-                last_msg = "token refreshed"
+            if http_status_code == 401:
+                # Token expired/invalid — refresh and retry.
+                request_headers["Authorization"] = f"Bearer {auth_client.force_refresh()}"
+                last_status_message = "token refreshed"
                 continue
 
-            if http_status in RETRY_STATUS:
-                retry_after = r.headers.get("Retry-After", "")
-                if retry_after.isdigit():
-                    sleep_s = int(retry_after)
-                else:
-                    sleep_s = min(60.0, (2 ** (attempt - 1)) + random.random())
-                last_msg = f"retryable HTTP {http_status}, sleeping {sleep_s:.1f}s"
-                time.sleep(sleep_s)
+            if http_status_code in RETRYABLE_HTTP_STATUS_CODES:
+                retry_after_header = response.headers.get("Retry-After", "")
+                sleep_duration_seconds = _compute_retry_sleep_seconds(
+                    attempt_number=attempt_number,
+                    retry_after_header_value=retry_after_header,
+                )
+                last_status_message = (
+                    f"retryable HTTP {http_status_code}, sleeping {sleep_duration_seconds:.1f}s"
+                )
+                time.sleep(sleep_duration_seconds)
                 continue
 
-            if http_status != 200:
-                snippet = ""
+            if http_status_code != 200:
+                response_snippet = ""
                 try:
-                    snippet = r.text[:200].replace("\n", " ")
+                    response_snippet = response.text[:200].replace("\n", " ")
                 except Exception:
-                    snippet = "non-text body"
-                return DownloadResult(task, False, "failed", http_status, 0, f"HTTP {http_status}: {snippet}", out_path)
+                    response_snippet = "non-text body"
+                    
+                return DownloadResult(download_task, False, "failed", http_status_code, 0, 
+                                      f"HTTP {http_status_code}: {response_snippet}", output_file_path)
 
-            content = r.content
-            if not _is_pdf(content):
-                return DownloadResult(task, False, "failed", http_status, 0, f"not a PDF; first bytes={content[:20]!r}", out_path)
+            pdf_content = response.content
+            if not _is_valid_pdf_content(pdf_content):
+                return DownloadResult(download_task, False, "failed", http_status_code, 0, 
+                                      f"not a PDF; first bytes={pdf_content[:20]!r}", output_file_path)
 
-            out_path.write_bytes(content)
-            return DownloadResult(task, True, "downloaded", http_status, len(content), last_msg or "ok", out_path)
+            output_file_path.write_bytes(pdf_content)
+            
+            return DownloadResult(download_task, True, "downloaded", http_status_code, 
+                                  len(pdf_content), last_status_message or "ok", output_file_path)
 
-        except requests.RequestException as e:
-            sleep_s = min(60.0, (2 ** (attempt - 1)) + random.random())
-            last_msg = f"request error: {e}; sleeping {sleep_s:.1f}s"
-            time.sleep(sleep_s)
+        except requests.RequestException as request_error:
+            sleep_duration_seconds = _compute_retry_sleep_seconds(attempt_number=attempt_number, retry_after_header_value=None)
+            last_status_message = f"request error: {request_error}; sleeping {sleep_duration_seconds:.1f}s"
+            time.sleep(sleep_duration_seconds)
 
-    return DownloadResult(task, False, "failed", http_status, 0, last_msg or "exhausted retries", out_path)
+    return DownloadResult(download_task, False, "failed", http_status_code, 0, last_status_message or "exhausted retries", output_file_path)
 
 
 def download_many(
-    tasks: list[DownloadTask],
+    download_tasks: list[DownloadTask],
     *,
-    config: DownloaderConfig,
-    auth: OPSAuthClient,
-    limiter: RateLimiter,
-    run_log: CsvRunLog,
+    downloader_config: OPSFirstPageDownloaderConfig,
+    auth_client: OPSAuthClient,
+    rate_limiter: RateLimiter,
+    download_logger: ThreadSafeCsvDownloadLogger,
 ) -> None:
     """
-    Bulk download with chunking + progress bar.
+    Download many OPS first-page PDFs using batching, a progress bar, and a thread pool.
 
-    Logging is injected (dependency inversion) so you can swap CSV logging with
-    SQLite, JSONL, etc. later.
+    This function is responsible for orchestration:
+    - Initializes the CSV log if needed.
+    - Ensures output directory exists.
+    - Splits tasks into batches to limit in-flight futures.
+    - Runs each batch with ThreadPoolExecutor for concurrency.
+    - Logs one CSV row per completed task.
+
+    Args:
+        download_tasks: List of tasks to download.
+        downloader_config: Runtime configuration.
+        auth_client: OPS OAuth client.
+        rate_limiter: Global rate limiter shared across workers.
+        download_logger: Thread-safe CSV logger (dependency-injected).
     """
-    run_log.init_if_missing()
-    config.out_dir.mkdir(parents=True, exist_ok=True)
+    download_logger.init_if_missing()
+    downloader_config.output_dir.mkdir(parents=True, exist_ok=True)
 
-    total = len(tasks)
-    pbar = tqdm(total=total, desc="Downloading front pages", unit="file")
+    total_task_count = len(download_tasks)
+    progress_bar = tqdm(total=total_task_count, desc="Downloading front pages", unit="file")
 
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    for chunk in _chunked(tasks, config.chunk_size):
-        with ThreadPoolExecutor(max_workers=config.workers) as ex:
+    for task_batch in _chunk_download_tasks(download_tasks, downloader_config.batch_size):
+        with ThreadPoolExecutor(max_workers=downloader_config.max_workers) as ex:
             futures = [
-                ex.submit(download_one, t, config=config, auth=auth, limiter=limiter)
-                for t in chunk
+                ex.submit(download_one, task, downloader_config=downloader_config, auth_client=auth_client, rate_limiter=rate_limiter)
+                for task in task_batch
             ]
-            for fut in as_completed(futures):
-                res: DownloadResult = fut.result()
-                run_log.append(LogRow(
-                    ts=CsvRunLog.now_ts(),
-                    country=res.task.country,
-                    pub_number=res.task.pub_number,
-                    kind=res.task.kind,
-                    status=res.status,
-                    http_status=res.http_status,
-                    bytes_written=res.bytes_written,
-                    message=res.message,
-                    out_path=str(res.out_path),
+            for future in as_completed(futures):
+                download_result: DownloadResult = future.result()
+                
+                download_logger.append_row(DownloadLogEntry(
+                    timestamp=ThreadSafeCsvDownloadLogger.current_timestamp_string(),
+                    country=download_result.download_task.country,
+                    pub_number=download_result.download_task.pub_number,
+                    kind=download_result.download_task.kind,
+                    status=download_result.download_status,
+                    http_status=download_result.http_status_code,
+                    bytes_written=download_result.bytes_written,
+                    message=download_result.status_message,
+                    out_path=str(download_result.output_file_path),
                 ))
-                pbar.update(1)
+                progress_bar.update(1)
 
-    pbar.close()
+    progress_bar.close()
