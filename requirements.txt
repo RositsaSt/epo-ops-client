@@ -1,0 +1,10 @@
+requests
+python-dotenv
+tqdm
+
+# OCR extractor
+pdf2image
+pytesseract
+opencv-python
+numpy
+Pillow
