@@ -38,6 +38,8 @@ class OPSClient:
         download_task: DownloadTask,
         session: requests.Session,
         timeout_seconds: int,
+        headers: dict[str, str] | None = None,
+        stream: bool = False,
     ) -> requests.Response:
         """
         Execute a single HTTP GET request for one abstract.
@@ -52,7 +54,14 @@ class OPSClient:
             "Authorization": f"Bearer {self._auth_client.get_valid_token()}",
             "Accept": "application/json",
         }
-        return session.get(url, headers=headers, timeout=timeout_seconds)
+
+        # Allow caller to override or add headers if needed (e.g. for PDF downloads)
+        auth_header = {"Authorization": f"Bearer {self._auth_client.get_valid_token()}"}
+        merged_headers = {}
+        if headers:
+            merged_headers.update(headers)
+        merged_headers.update(auth_header)
+        return session.get(url, headers=merged_headers, timeout=timeout_seconds, stream=stream)
 
     def refresh_token(self) -> str:
         """
