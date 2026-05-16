@@ -1,4 +1,4 @@
-from future import annotations
+from __future__ import annotations
 
 from ..downloaders.first_page.models import DownloadTask as LegacyFirstPageTask
 from ..domain.models import PDFDownloadTask, PageSelection
