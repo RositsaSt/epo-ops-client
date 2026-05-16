@@ -22,6 +22,7 @@ class OPSDataType(str, Enum):
     DESCRIPTION = "description"
     CLAIMS = "claims"
     EQUIVALENTS = "equivalents"
+    IMAGES = "images"
     
 @dataclass(frozen=True)
 class DownloadTask:
@@ -68,3 +69,71 @@ class DownloadResult:
     bytes_written: int
     status_message: str
     output_file_path: Path
+
+@dataclass(frozen=True)
+class PageSelection:
+    """"
+    Represents which pages to download for a given publication.
+    
+    Modes:
+    - kind = "first": download only the first page (for quick checks or when fulltext is not needed)
+    - kind = "all": download all pages (for comprehensive data retrieval)
+    - kind = "range": download a specific range of pages (e.g. pages 1-5) - between start (inclusive) and end (inclusive)
+    """
+    kind: str
+    start: int | None = None
+    end: int | None = None
+
+    @staticmethod
+    def first_page() -> PageSelection:
+        return PageSelection(kind="first", start=1, end=1)
+    
+    @staticmethod
+    def all_pages() -> PageSelection:
+        return PageSelection(kind="all", start=None, end=None)
+    
+    @staticmethod
+    def page_range(start: int, end: int) -> PageSelection:
+        if start < 1 or end < start:
+            raise ValueError("Invalid page range: start must be >= 1 and end must be >= start")
+        return PageSelection(kind="range", start=start, end=end)
+    
+@dataclass(frozen=True)
+class PDFDownloadTask:
+    """
+    Represents a task to download a PDF image from OPS.
+
+    Fields
+    ------
+    country: str
+        The country code of the publication (e.g. "EP").
+    pub: str
+        The publication number without kind code (e.g. "1000000").
+    kind: str
+        The kind code of the publication (e.g. "A1").
+    page_selection: PageSelection
+        Which pages to download (first, all, or a specific range). Default is first page only.
+    """
+    country: str
+    pub: str
+    kind: str
+    page_selection: PageSelection = PageSelection.first_page()
+
+    def output_base_filename(self) -> str:
+        """
+        Generates a base filename for the downloaded PDF based on the publication details and page selection.
+
+        Examples:
+        - For country="EP", pub="1000000", kind="A1", and first page selection, returns "EP1000000A1_page1"
+        - For all pages selection, returns "EP1000000A1_all_pages"
+        - For a range of pages (e.g. 1-5), returns "EP1000000A1_pages_1-5"
+        """
+        base_name = f"{self.country}{self.pub}{self.kind}"
+        if self.page_selection.kind == "first":
+            return f"{base_name}_page1"
+        elif self.page_selection.kind == "all":
+            return f"{base_name}_all_pages"
+        elif self.page_selection.kind == "range" and self.page_selection.start and self.page_selection.end:
+            return f"{base_name}_pages_{self.page_selection.start}-{self.page_selection.end}"
+        else:
+            raise ValueError(f"Unknown page selection kind: {self.page_selection.kind}")    
