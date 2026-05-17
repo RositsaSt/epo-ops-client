@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 
@@ -31,6 +32,7 @@ class OPSAuthClient:
         self._client_credentials_auth = HTTPBasicAuth(ops_key, ops_secret)
         self._request_timeout_seconds = request_timeout_seconds
 
+        self._lock = threading.Lock()
         self._cached_token: OAuthAccessToken | None = None
 
     def _request_new_token(self) -> OAuthAccessToken:
@@ -58,16 +60,16 @@ class OPSAuthClient:
         Returns a valid (non-expired) access token.
         Automatically refreshes if needed.
         """
-
-        if self._cached_token is None or time.time() >= self._cached_token.expires_epoch_seconds:
-            self._cached_token = self._request_new_token()
-                
-        return self._cached_token.token_value
+        with self._lock:
+            if self._cached_token is None or time.time() >= self._cached_token.expires_epoch_seconds:
+                self._cached_token = self._request_new_token()
+            return self._cached_token.token_value
 
     def force_refresh_token(self) -> str:
         """
         Forces retrieval of a new access token.
         Useful after receiving a 401 response.
         """
-        self._cached_token = self._request_new_token()
-        return self._cached_token.token_value
+        with self._lock:
+            self._cached_token = self._request_new_token()
+            return self._cached_token.token_value

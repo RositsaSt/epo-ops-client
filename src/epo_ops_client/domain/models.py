@@ -43,12 +43,16 @@ class DownloadResult:
     Value object describing the outcome of a single download attempt.
 
     This result is returned by the downloader regardless of success/failure,
-    so the caller can log outcomes uniformly.
+    so the caller can log outcomes uniformly. Works for both JSON (DownloadTask)
+    and PDF (PDFDownloadTask) downloads — the download_task field holds whichever
+    task type was executed.
 
     Fields
     ------
     download_task:
-        The requested publication identifier and identifier type (docdb/epodoc).
+        The original task object (DownloadTask or PDFDownloadTask).
+    pub_id:
+        Human-readable identifier for logging (e.g. pub_id or country+pub+kind).
     is_successful:
         True when the operation produced a usable file OR was intentionally skipped.
     download_status:
@@ -60,9 +64,10 @@ class DownloadResult:
     status_message:
         Short, human-readable explanation of what happened (for logs/debugging).
     output_file_path:
-        Path of the JSON file (even for skipped/failed outcomes).
+        Path of the output file (even for skipped/failed outcomes).
     """
-    download_task: DownloadTask
+    download_task: object           # DownloadTask or PDFDownloadTask
+    pub_id: str                     # human-readable id for logging
     is_successful: bool
     download_status: str            # downloaded / skipped / failed
     http_status_code: int
@@ -72,7 +77,7 @@ class DownloadResult:
 
 @dataclass(frozen=True)
 class PageSelection:
-    """"
+    """
     Represents which pages to download for a given publication.
     
     Modes:

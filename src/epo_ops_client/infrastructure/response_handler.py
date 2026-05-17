@@ -34,6 +34,7 @@ class ResponseHandler:
         self,
         *,
         download_task: Any,     # DownloadTask or PDFDownloadTask
+        pub_id: str,
         output_path: Path,
         response: requests.Response,
     ) -> DownloadResult:
@@ -42,16 +43,11 @@ class ResponseHandler:
 
         # If the response advertises PDF or content looks like PDF -> save bytes
         if _looks_like_pdf(response.content, content_type):
-            # optional extra validation: ensure PDF magic bytes
-            if not response.content.startswith(b"%PDF"):
-                # still write the bytes but mark caution in the status_message
-                bytes_written = self._store.write_bytes_atomic(output_path, response.content)
-                status_msg = "saved binary payload (not starting with %PDF)"
-            else:
-                bytes_written = self._store.write_bytes_atomic(output_path, response.content)
-                status_msg = "ok"
+            bytes_written = self._store.write_bytes_atomic(output_path, response.content)
+            status_msg = "ok" if response.content.startswith(b"%PDF") else "saved binary payload (not starting with %PDF)"
             return DownloadResult(
                 download_task=download_task,
+                pub_id=pub_id,
                 is_successful=True,
                 download_status="downloaded",
                 http_status_code=response.status_code,
@@ -66,6 +62,7 @@ class ResponseHandler:
             bytes_written = self._store.write_json_atomic(output_path, payload)
             return DownloadResult(
                 download_task=download_task,
+                pub_id=pub_id,
                 is_successful=True,
                 download_status="downloaded",
                 http_status_code=response.status_code,
@@ -78,6 +75,7 @@ class ResponseHandler:
             bytes_written = self._store.write_bytes_atomic(output_path, response.content)
             return DownloadResult(
                 download_task=download_task,
+                pub_id=pub_id,
                 is_successful=True,
                 download_status="downloaded",
                 http_status_code=response.status_code,
@@ -89,13 +87,15 @@ class ResponseHandler:
     def handle_http_failure(
         self,
         *,
-        download_task: DownloadTask,
+        download_task: Any,     # DownloadTask or PDFDownloadTask
+        pub_id: str,
         output_path: Path,
         response: requests.Response,
     ) -> DownloadResult:
         snippet = (response.text or "")[:200]
         return DownloadResult(
             download_task=download_task,
+            pub_id=pub_id,
             is_successful=False,
             download_status="failed",
             http_status_code=response.status_code,

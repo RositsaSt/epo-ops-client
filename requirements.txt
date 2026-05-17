@@ -1,6 +1,7 @@
 requests
 python-dotenv
 tqdm
+pypdf
 
 # OCR extractor
 pdf2image

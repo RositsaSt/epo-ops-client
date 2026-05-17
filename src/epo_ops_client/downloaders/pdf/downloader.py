@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Any
 import time
 
 import requests
 
 from ..first_page.config import OPSFirstPageDownloaderConfig as LegacyConfig
 from ...domain.models import PDFDownloadTask, PageSelection
+from ...domain.models import DownloadResult as GenericDownloadResult
 from ...infrastructure.auth import OPSAuthClient
 from ...infrastructure.retry_policy import RetryPolicy
 from ...infrastructure.response_handler import ResponseHandler
