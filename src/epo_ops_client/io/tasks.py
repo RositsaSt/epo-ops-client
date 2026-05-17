@@ -87,13 +87,13 @@ def load_pdf_tasks_from_csv(
     pdf_tasks: list[PDFDownloadTask] = []
     with csv_file_path.open("r", encoding="utf-8", newline="") as f:
         for row in csv.DictReader(f):
-            pub = row[pub_col].strip()
+            pub_number = row[pub_col].strip()
             kind = row[kind_col].strip()
             country = (row.get(country_col) or "").strip() or default_country
-            if pub and kind:
+            if pub_number and kind:
                 pdf_tasks.append(PDFDownloadTask(
                     country=country,
-                    pub=pub,
+                    pub_num=pub_number,
                     kind=kind,
                     page_selection=page_selection,
                 ))
