@@ -237,7 +237,7 @@ def run_pdf_downloads(
                 except Exception as exc:
                     result = DownloadResult(
                         download_task=task,
-                        pub_id=f"{task.country}{task.pub}{task.kind}",
+                        pub_id=f"{task.country}{task.pub_num}{task.kind}",
                         is_successful=False,
                         download_status="failed",
                         http_status_code=0,
