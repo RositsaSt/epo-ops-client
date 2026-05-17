@@ -16,7 +16,7 @@ def load_download_tasks_from_csv(
     csv_file_path: str | Path,
     *,
     data_type: OPSDataType,
-    identifier_type: OPSIdentifierType = OPSIdentifierType.DOCDB,
+    identifier_type: OPSIdentifierType,
     pub_id_col: str = "pub_id",
 ) -> list[DownloadTask]:
     """
@@ -37,17 +37,17 @@ def load_download_tasks_from_csv(
         Column name for the publication ID (default: "pub_id").
     """
     csv_file_path = Path(csv_file_path)
-    tasks: list[DownloadTask] = []
+    download_tasks: list[DownloadTask] = []
     with csv_file_path.open("r", encoding="utf-8", newline="") as f:
         for row in csv.DictReader(f):
             pub_id = row[pub_id_col].strip()
             if pub_id:
-                tasks.append(DownloadTask(
+                download_tasks.append(DownloadTask(
                     pub_id=pub_id,
                     data_type=data_type,
                     identifier_type=identifier_type,
                 ))
-    return tasks
+    return download_tasks
 
 
 def load_pdf_tasks_from_csv(
@@ -84,17 +84,17 @@ def load_pdf_tasks_from_csv(
         Fallback country code when the country column is absent or empty (default: "EP").
     """
     csv_file_path = Path(csv_file_path)
-    tasks: list[PDFDownloadTask] = []
+    pdf_tasks: list[PDFDownloadTask] = []
     with csv_file_path.open("r", encoding="utf-8", newline="") as f:
         for row in csv.DictReader(f):
             pub = row[pub_col].strip()
             kind = row[kind_col].strip()
             country = (row.get(country_col) or "").strip() or default_country
             if pub and kind:
-                tasks.append(PDFDownloadTask(
+                pdf_tasks.append(PDFDownloadTask(
                     country=country,
                     pub=pub,
                     kind=kind,
                     page_selection=page_selection,
                 ))
-    return tasks
+    return pdf_tasks
