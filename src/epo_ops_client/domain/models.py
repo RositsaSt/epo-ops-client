@@ -124,7 +124,7 @@ class PDFDownloadTask:
     kind: str
     page_selection: PageSelection = PageSelection.first_page()
 
-    def output_base_filename(self) -> str:
+    def output_base_filename(self, total_pages: int | None = None) -> str:
         """
         Generates a base filename for the downloaded PDF based on the publication details and page selection.
 
@@ -137,8 +137,9 @@ class PDFDownloadTask:
         if self.page_selection.kind == "first":
             return f"{base_name}_page1"
         elif self.page_selection.kind == "all":
-            return f"{base_name}_all_pages"
+            if total_pages is not None:
+                return f"{base_name}_pages_1-{total_pages}"
         elif self.page_selection.kind == "range" and self.page_selection.start and self.page_selection.end:
             return f"{base_name}_pages_{self.page_selection.start}-{self.page_selection.end}"
         else:
-            raise ValueError(f"Unknown page selection kind: {self.page_selection.kind}")    
+            raise ValueError(f"Unknown page selection kind: {self.page_selection.kind}")

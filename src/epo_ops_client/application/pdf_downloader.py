@@ -56,7 +56,7 @@ class PDFPageDownloader:
         Download all required pages for `task` and return a DownloadResult
         pointing to the final (possibly merged) PDF file.
         """
-        pub_id = f"{task.country}{task.pub}{task.kind}"
+        pub_id = f"{task.country}{task.pub_num}{task.kind}"
         output_path = self._output_dir / f"{task.output_base_filename()}.pdf"
 
         # Skip if already downloaded (secondary guard; the runner pre-filters via the log)
@@ -93,6 +93,7 @@ class PDFPageDownloader:
                     self._fetch_page(task=task, page_number=p, session=session)
                     for p in range(1, total + 1)
                 ]
+                output_path = self._output_dir / f"{task.output_base_filename(total_pages=total)}.pdf"
                 bytes_written = self._merge_pages(pages, output_path)
             else:
                 raise ValueError(f"Unknown page_selection.kind: {kind!r}")
@@ -138,7 +139,7 @@ class PDFPageDownloader:
         """
         url = (
             self._config.pdf_image_url_template().format(
-                country=task.country, pub=task.pub, kind=task.kind
+                country=task.country, pub_num=task.pub_num, kind=task.kind
             )
             + f"?Range={page_number}"
         )
@@ -183,7 +184,7 @@ class PDFPageDownloader:
 
         raise RuntimeError(
             f"Exhausted {self._retry_policy.max_attempts} retries for "
-            f"{task.country}{task.pub}{task.kind} page {page_number}"
+            f"{task.country}{task.pub_num}{task.kind} page {page_number}"
         )
 
     def _get_total_page_count(
@@ -195,7 +196,7 @@ class PDFPageDownloader:
         The EPO OPS images endpoint returns JSON containing drawing information,
         including the number of pages.
         """
-        pub_id = f"{task.country}{task.pub}.{task.kind}"
+        pub_id = f"{task.country}{task.pub_num}.{task.kind}"
         url = self._config.images_metadata_url_template().format(
             identifier_type="epodoc",
             pub_id=pub_id,
@@ -246,40 +247,18 @@ class PDFPageDownloader:
 
     @staticmethod
     def _parse_page_count(data: object, pub_id: str) -> int:
-        """
-        Extract @number-of-pages from the OPS images metadata JSON response.
-
-        The OPS JSON structure varies. This method tries the most common path
-        and raises ValueError if the page count cannot be found.
-        """
         try:
-            world_data = data["ops:world-patent-data"]  # type: ignore[index]
-            # The images endpoint returns ops:patent-family or ops:biblio-search
-            # Try ops:patent-family path first
-            try:
-                members = world_data["ops:patent-family"]["ops:family-member"]
-                if isinstance(members, dict):
-                    members = [members]
-                for member in members:
-                    drawing = member.get("ops:drawing")
-                    if drawing and "@number-of-pages" in drawing:
-                        return int(drawing["@number-of-pages"])
-            except (KeyError, TypeError):
-                pass
-
-            # Fallback: try ops:biblio-search path
-            members = (
-                world_data.get("ops:biblio-search", {})
-                .get("ops:search-result", {})
-                .get("ops:publication-reference", [])
+            inquiry_result = (
+                data["ops:world-patent-data"]          # type: ignore[index]
+                ["ops:document-inquiry"]
+                ["ops:inquiry-result"]
             )
-            if isinstance(members, dict):
-                members = [members]
-            for member in members:
-                drawing = member.get("ops:drawing")
-                if drawing and "@number-of-pages" in drawing:
-                    return int(drawing["@number-of-pages"])
-
+            instances = inquiry_result.get("ops:document-instance", [])
+            if isinstance(instances, dict):
+                instances = [instances]
+            for instance in instances:
+                if instance.get("@desc") == "FullDocument" and "@number-of-pages" in instance:
+                    return int(instance["@number-of-pages"])
         except (KeyError, TypeError, AttributeError):
             pass
 
