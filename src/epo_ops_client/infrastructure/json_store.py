@@ -23,7 +23,7 @@ class JsonResponseStore:
         """
         Compute the destination path for a task.
         """
-        return self._output_dir / f"{task.pub_id}.json"
+        return self._output_dir / f"{task.pub_id}_{task.data_type.value}.json"
 
     def is_already_downloaded(self, path: Path, *, min_bytes: int = 1024) -> bool:
         """
