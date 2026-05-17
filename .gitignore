@@ -11,13 +11,13 @@ venv/
 env/
 ENV/
 
-# Packaging
+# Packaging / build
 build/
 dist/
 *.egg-info/
 .eggs/
 
-# Test / type / lint caches
+# Test / lint caches
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -30,28 +30,24 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 
-# OS/editor
+# OS / editor
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
-# Local environment files
+# Credentials — never commit these
 .env
 .env.*
 *.local
 
-# Logs and generated data
-*.log
+# Downloaded output files — keep sample CSVs but ignore everything downloaded
 download_log.csv
-*.csv
-output/
-outputs/
-downloads/
-front_pages/
-
-# OCR / image processing temp files
 *.pdf
 *.tif
 *.tiff
 *.png
+output/
+outputs/
+downloads/
+data/

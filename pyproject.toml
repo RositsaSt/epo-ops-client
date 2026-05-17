@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "epo-ops-client"
+version = "0.2.0"
+description = "Universal downloader for the EPO OPS published-data API"
+requires-python = ">=3.12"
+dependencies = [
+    "requests",
+    "python-dotenv",
+    "tqdm",
+    "pypdf",
+]
+
+[project.optional-dependencies]
+ocr = [
+    "pdf2image",
+    "pytesseract",
+    "opencv-python",
+    "numpy",
+    "Pillow",
+]
+dev = [
+    "pytest",
+]
+
+[project.scripts]
+epo-ops = "epo_ops_client.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -26,7 +26,7 @@ class OPSClient:
         """
         Build the OPS URL for the given download task.
         """
-        return self._config.url_template().format(
+        return self._config.published_data_url_template().format(
             identifier_type=download_task.identifier_type.value,
             pub_id=download_task.pub_id,
             data_type=download_task.data_type.value
@@ -38,9 +38,11 @@ class OPSClient:
         download_task: DownloadTask,
         session: requests.Session,
         timeout_seconds: int,
+        headers: dict[str, str] | None = None,
+        stream: bool = False,
     ) -> requests.Response:
         """
-        Execute a single HTTP GET request for one abstract.
+        Execute a single HTTP GET request for one download task.
 
         Returns
         -------
@@ -48,11 +50,11 @@ class OPSClient:
             Raw response from OPS.
         """
         url = self.build_url(download_task)
-        headers = {
-            "Authorization": f"Bearer {self._auth_client.get_valid_token()}",
-            "Accept": "application/json",
-        }
-        return session.get(url, headers=headers, timeout=timeout_seconds)
+        merged_headers = dict(headers or {})
+        merged_headers["Authorization"] = f"Bearer {self._auth_client.get_valid_token()}"
+        if "Accept" not in merged_headers:
+            merged_headers["Accept"] = "application/json"
+        return session.get(url, headers=merged_headers, timeout=timeout_seconds, stream=stream)
 
     def refresh_token(self) -> str:
         """

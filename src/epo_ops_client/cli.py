@@ -2,67 +2,200 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-from .infrastructure.auth import OPSAuthClient
 from .config import OPSConfig
-from .application.bulk_downloader import fetch_and_store_abstracts
-from .io.io_tasks import load_download_tasks_from_csv
-from .io.logging_csv import DownloadLogger
+from .domain.models import OPSIdentifierType, OPSDataType, PageSelection
+from .infrastructure.auth import OPSAuthClient
 from .infrastructure.rate_limiter import RateLimiter
-from .domain.models import OPSIdentifierType, OPSDataType
+from .io.logger import DownloadLogger
+from .io.tasks import load_download_tasks_from_csv, load_pdf_tasks_from_csv
+from .application.runner import run_data_downloads, run_pdf_downloads
+
+# All --type values: the JSON data types plus "pdf" for image downloads
+_JSON_DATA_TYPES = [t.value for t in OPSDataType]
+_ALL_TYPES = _JSON_DATA_TYPES + ["pdf"]
+
+
+def _parse_page_selection(value: str) -> PageSelection:
+    """
+    Parse --page-selection argument.
+      first     → PageSelection.first_page()
+      all       → PageSelection.all_pages()
+      N-M       → PageSelection.page_range(N, M)  (e.g. "1-5")
+    """
+    if value == "first":
+        return PageSelection.first_page()
+    if value == "all":
+        return PageSelection.all_pages()
+    m = re.fullmatch(r"(\d+)-(\d+)", value)
+    if m:
+        return PageSelection.page_range(int(m.group(1)), int(m.group(2)))
+    raise argparse.ArgumentTypeError(
+        f"Invalid --page-selection {value!r}. "
+        "Expected 'first', 'all', or a range like '1-5'."
+    )
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="epo-ops",
+        description=(
+            "Universal EPO OPS downloader.\n"
+            "Downloads from any published-data endpoint "
+            "(biblio, abstract, claims, PDF images, etc.)."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--type",
+        dest="data_type",
+        required=True,
+        choices=_ALL_TYPES,
+        metavar="TYPE",
+        help=(
+            "Endpoint type to download. JSON types: "
+            + ", ".join(_JSON_DATA_TYPES)
+            + ". Use 'pdf' for full-image PDF downloads."
+        ),
+    )
+    parser.add_argument(
+        "--tasks-csv",
+        type=Path,
+        required=True,
+        help=(
+            "CSV file listing tasks. "
+            "JSON types: must have a 'pub_id' column. "
+            "PDF type: must have 'pub_number' and 'kind' columns; "
+            "'country' is optional (default: EP)."
+        ),
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Directory where downloaded files are written.",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the CSV download log (used for resume logic). "
+            "Defaults to <output-dir>/download_log.csv."
+        ),
+    )
+    parser.add_argument(
+        "--id-type",
+        dest="identifier_type",
+        choices=[t.value for t in OPSIdentifierType],
+        default=OPSIdentifierType.DOCDB.value,
+        help="Identifier type for JSON downloads: docdb (default) or epodoc.",
+    )
+    parser.add_argument(
+        "--page-selection",
+        type=_parse_page_selection,
+        default="first",
+        metavar="SELECTION",
+        help=(
+            "Page selection for PDF downloads: "
+            "'first' (default), 'all', or a range like '1-5'. "
+            "Ignored for non-PDF types."
+        ),
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=(
+            "Number of concurrent download threads. "
+            "Defaults to 4 for JSON types and 2 for PDF."
+        ),
+    )
+    parser.add_argument(
+        "--requests-per-second",
+        type=float,
+        default=1.0,
+        help="Maximum requests per second across all threads (default: 1.0).",
+    )
+    return parser
 
 
 def main() -> None:
-    """
-    Entry point for the OPS first-page PDF downloader.
-
-    Workflow:
-    1. Load environment variables (.env)
-    2. Validate OPS credentials
-    3. Initialize configuration and services (auth, rate limiter, logger)
-    4. Load download tasks from CSV (publication ids)
-    5. Download abstracts sequentially and log results
-    """
-    
     load_dotenv()
 
     ops_key = os.getenv("EPO_OPS_KEY")
     ops_secret = os.getenv("EPO_OPS_SECRET")
     if not ops_key or not ops_secret:
-        raise SystemExit("Missing EPO_OPS_KEY / EPO_OPS_SECRET in environment (.env).")
-    
-    parser = argparse.ArgumentParser(description="Download patent descriptions from EPO OPS.")
-    parser.add_argument("--output-dir", type=Path, required=True, help="Output directory for downloaded json files.")
-    parser.add_argument("--log-file", type=Path, required=True, help="Output directory for the log file.")
-    parser.add_argument("--tasks-csv", type=Path, required=True, help="Directory containing the input csv file.")
-    parser.add_argument("--id-type", type=str, choices=[t.value for t in OPSIdentifierType],
-                        default=OPSIdentifierType.DOCDB.value, help="Identifier type for OPS requests: docdb or epodoc. The default value is docdb.")
-    parser.add_argument("--data-type", type=str, choices=[t.value for t in OPSDataType],
-                        required=True, help="Type of data to be downloaded: biblio, abstract, full-cycle, fulltext, description, claims or equivalents.")
+        sys.exit("Missing EPO_OPS_KEY / EPO_OPS_SECRET in environment (.env).")
+
+    parser = _build_parser()
     args = parser.parse_args()
 
-    downloader_config = OPSConfig(output_dir=args.output_dir, log_file_path=args.log_file)
-    
-    auth_client = OPSAuthClient(downloader_config.ops_api_base_url, ops_key, ops_secret, 
-                                request_timeout_seconds=downloader_config.token_request_timeout_seconds)
-    
-    rate_limiter = RateLimiter(downloader_config.max_requests_per_second)
-    
-    download_logger = DownloadLogger(downloader_config.log_file_path)
-    
-    download_tasks = load_download_tasks_from_csv(str(args.tasks_csv), identifier_type=OPSIdentifierType(args.id_type), data_type=OPSDataType(args.data_type))
-    
-    fetch_and_store_abstracts(download_tasks, downloader_config=downloader_config, auth_client=auth_client, 
-                  rate_limiter=rate_limiter, download_logger=download_logger)
+    log_file = args.log_file or (args.output_dir / "download_log.csv")
+
+    config = OPSConfig(
+        output_dir=args.output_dir,
+        log_file_path=log_file,
+        max_requests_per_second=args.requests_per_second,
+    )
+
+    auth_client = OPSAuthClient(
+        config.ops_api_base_url,
+        ops_key,
+        ops_secret,
+        request_timeout_seconds=config.token_request_timeout_seconds,
+    )
+    rate_limiter = RateLimiter(config.max_requests_per_second)
+    logger = DownloadLogger(log_file)
+
+    if args.data_type == "pdf":
+        max_workers = args.workers if args.workers is not None else 2
+        tasks = load_pdf_tasks_from_csv(args.tasks_csv, args.page_selection)
+        print(
+            f"Loaded {len(tasks)} PDF task(s). "
+            f"Page selection: {args.page_selection.kind}. "
+            f"Workers: {max_workers}."
+        )
+        run_pdf_downloads(
+            tasks,
+            config=config,
+            auth_client=auth_client,
+            rate_limiter=rate_limiter,
+            logger=logger,
+            output_dir=args.output_dir,
+            max_workers=max_workers,
+        )
+    else:
+        max_workers = args.workers if args.workers is not None else 4
+        data_type = OPSDataType(args.data_type)
+        identifier_type = OPSIdentifierType(args.identifier_type)
+        tasks = load_download_tasks_from_csv(
+            args.tasks_csv,
+            data_type=data_type,
+            identifier_type=identifier_type,
+        )
+        print(
+            f"Loaded {len(tasks)} task(s). "
+            f"Type: {args.data_type}. "
+            f"Workers: {max_workers}."
+        )
+        run_data_downloads(
+            tasks,
+            config=config,
+            auth_client=auth_client,
+            rate_limiter=rate_limiter,
+            logger=logger,
+            max_workers=max_workers,
+        )
 
     print(
-        f"Download complete.\n"
-        f"Log file: {downloader_config.log_file_path}\n"
-        f"Output directory: {downloader_config.output_dir}"
-        )
+        f"\nDone. Log: {log_file}  Output: {args.output_dir}"
+    )
 
 
 if __name__ == "__main__":
