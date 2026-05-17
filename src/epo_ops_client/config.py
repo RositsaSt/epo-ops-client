@@ -19,7 +19,7 @@ class OPSConfig:
     log_file_path: Path
 
     # OPS API
-    ops_api_base_url: str = "https://ops.epo.org/3.2/rest-services"
+    ops_api_base_url: str = "https://ops.epo.org/3.2/"
 
     # Throttling
     max_requests_per_second: float = 1.0
@@ -42,7 +42,7 @@ class OPSConfig:
         """
         return (
             f"{self.ops_api_base_url}"
-            "/published-data/publication/{identifier_type}/{pub_id}/{data_type}"
+            "rest-services/published-data/publication/{identifier_type}/{pub_id}/{data_type}"
         )
     
     def pdf_image_url_template(self) -> str:
@@ -51,7 +51,7 @@ class OPSConfig:
 
         Template placeholders:
             {country} - country code, e.g. EP
-            {pub}     - publication number, e.g. 1000000
+            {pub_num}     - publication number, e.g. 1000000
             {kind}    - kind code, e.g. A1
 
         Append ?Range={page_number} to select a specific page (1-based).
@@ -59,7 +59,7 @@ class OPSConfig:
         """
         return (
             f"{self.ops_api_base_url}"
-            "/published-data/images/{country}/{pub}/{kind}/fullimage"
+            "rest-services/published-data/images/{country}/{pub_num}/{kind}/fullimage"
         )
 
     def images_metadata_url_template(self) -> str:
@@ -69,11 +69,11 @@ class OPSConfig:
         Template placeholders:
             {identifier_type} - one of docdb or epodoc
             {pub_id}          - publication ID formatted for the identifier type
-                                e.g. for epodoc: EP1000000.A1
+                                e.g. for epodoc: EP1000000A1
 
-        Example: .../publication/epodoc/EP1000000.A1/images
+        Example: .../publication/epodoc/EP1000000A1/images
         """
         return (
             f"{self.ops_api_base_url}"
-            "/published-data/publication/{identifier_type}/{pub_id}/images"
+            "rest-services/published-data/publication/{identifier_type}/{pub_id}/images"
         )
