@@ -66,7 +66,7 @@ class DownloadResult:
     output_file_path:
         Path of the output file (even for skipped/failed outcomes).
     """
-    download_task: object           # DownloadTask or PDFDownloadTask
+    download_task: DownloadTask | PDFDownloadTask
     pub_id: str                     # human-readable id for logging
     is_successful: bool
     download_status: str            # downloaded / skipped / failed
@@ -112,7 +112,7 @@ class PDFDownloadTask:
     ------
     country: str
         The country code of the publication (e.g. "EP").
-    pub: str
+    pub_num: str
         The publication number without kind code (e.g. "1000000").
     kind: str
         The kind code of the publication (e.g. "A1").
@@ -120,7 +120,7 @@ class PDFDownloadTask:
         Which pages to download (first, all, or a specific range). Default is first page only.
     """
     country: str
-    pub: str
+    pub_num: str
     kind: str
     page_selection: PageSelection = PageSelection.first_page()
 
@@ -129,11 +129,11 @@ class PDFDownloadTask:
         Generates a base filename for the downloaded PDF based on the publication details and page selection.
 
         Examples:
-        - For country="EP", pub="1000000", kind="A1", and first page selection, returns "EP1000000A1_page1"
+        - For country="EP", pub_num="1000000", kind="A1", and first page selection, returns "EP1000000A1_page1"
         - For all pages selection, returns "EP1000000A1_all_pages"
         - For a range of pages (e.g. 1-5), returns "EP1000000A1_pages_1-5"
         """
-        base_name = f"{self.country}{self.pub}{self.kind}"
+        base_name = f"{self.country}{self.pub_num}{self.kind}"
         if self.page_selection.kind == "first":
             return f"{base_name}_page1"
         elif self.page_selection.kind == "all":

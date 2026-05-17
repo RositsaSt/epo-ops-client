@@ -33,7 +33,7 @@ class ResponseHandler:
     def handle_success(
         self,
         *,
-        download_task: Any,     # DownloadTask or PDFDownloadTask
+        download_task: DownloadTask | PDFDownloadTask,
         pub_id: str,
         output_path: Path,
         response: requests.Response,
@@ -87,7 +87,7 @@ class ResponseHandler:
     def handle_http_failure(
         self,
         *,
-        download_task: Any,     # DownloadTask or PDFDownloadTask
+        download_task: DownloadTask | PDFDownloadTask,
         pub_id: str,
         output_path: Path,
         response: requests.Response,
